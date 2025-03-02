@@ -1,0 +1,38 @@
+{
+  "name": "claude-code-figma",
+  "version": "1.0.0",
+  "main": "index.js",
+  "type": "module",
+  "bin": {
+    "claude-code-figma": "./index.js"
+  },
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "install-global": "npm install -g ."
+  },
+  "keywords": [
+    "figma",
+    "code",
+    "generation",
+    "component",
+    "design",
+    "claude",
+    "ai-first",
+    "claude-code",
+    "anthropic"
+  ],
+  "author": "",
+  "license": "ISC",
+  "description": "An AI-first CLI tool designed specifically for Claude Code to extract and transform Figma designs into code",
+  "dependencies": {
+    "@figma/rest-api-spec": "^0.24.0",
+    "canvas": "^3.1.0",
+    "commander": "^13.1.0",
+    "dotenv": "^16.4.7",
+    "inquirer": "^12.4.2",
+    "js-yaml": "^4.1.0",
+    "node-fetch": "^2.7.0",
+    "open": "^10.1.0",
+    "ora": "^8.2.0"
+  }
+}

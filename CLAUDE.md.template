@@ -1,0 +1,64 @@
+# Project Information for Claude
+
+## Figma Integration
+
+This project uses the `claude-code-figma` CLI tool to extract design information from Figma.
+
+### Converting Figma designs to code
+
+When a Figma link is provided, use the following steps:
+
+1. Extract the Figma metadata:
+   ```bash
+   claude-code-figma extract <figma-url> --optimize
+   ```
+
+2. Based on the metadata, implement the component using:
+   - The project's existing theme system for colors, typography, and spacing
+   - The component structure from the Figma design
+   - The Tailwind CSS classes provided in the `tailwindClasses` section
+   - The naming conventions used in the codebase
+   - The framework and styling approaches used in the project
+   
+   If the metadata contains `tailwindConfig` suggestions, you may need to add custom colors or other values to the project's tailwind.config.js file.
+
+### Design System Information
+
+When implementing components from Figma designs, refer to these project-specific design conventions:
+
+#### Color System
+<!-- Provide information about your project's color system -->
+Example:
+- Primary colors: Defined in `src/styles/theme.js` as `theme.colors.primary`
+- Secondary colors: Defined in `src/styles/theme.js` as `theme.colors.secondary`
+- Background colors: Use `theme.colors.background`
+
+#### Typography
+<!-- Provide information about your project's typography system -->
+Example:
+- Headings: Use the `Typography` component with the `variant="h1"` through `variant="h6"` props
+- Body text: Use the `Typography` component with `variant="body1"` or `variant="body2"` props
+
+#### Spacing
+<!-- Provide information about your project's spacing system -->
+Example:
+- Use theme spacing utilities: `theme.spacing(1)` equals 8px
+- For margins and padding, use the `m` and `p` props from the component system
+
+#### Component Structure
+<!-- Provide information about your project's component structure -->
+Example:
+- Components should be placed in `src/components/`
+- Each component should have its own directory with:
+  - `index.js` - Exports the component
+  - `ComponentName.jsx` - The component implementation
+  - `ComponentName.styles.js` - Styled components or styles
+  - `ComponentName.test.js` - Tests
+
+#### Naming Conventions
+<!-- Provide information about your project's naming conventions -->
+Example:
+- Component files and directories use PascalCase
+- React components use PascalCase
+- CSS classes use kebab-case
+- JavaScript functions and variables use camelCase
