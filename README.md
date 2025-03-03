@@ -53,17 +53,24 @@ claude-code-figma extract https://www.figma.com/file/abcdef123456/MyDesigns?node
 ### Options
 
 - `-o, --output <path>`: Save output to a file instead of printing to console
-- `-f, --format <format>`: Output format (json or yaml, default: json)
+- `-f, --format <format>`: Output format (summary, json, yaml, bullet). Default: summary
 - `-v, --verbose`: Enable verbose logging
-- `--optimize`: Optimize output for component mapping (recommended for Claude Code integration)
+- `--optimize`: Optimize output for component mapping (enabled by default)
 
 Example:
 
 ```bash
-claude-code-figma extract https://www.figma.com/file/abcdef123456/MyDesigns?node-id=123%3A456 --output component-metadata.json --optimize
+# Using default summary format (recommended)
+claude-code-figma extract https://www.figma.com/file/abcdef123456/MyDesigns?node-id=123%3A456
+
+# Save to file
+claude-code-figma extract https://www.figma.com/file/abcdef123456/MyDesigns?node-id=123%3A456 --output component-metadata.md
+
+# Using other formats
+claude-code-figma extract https://www.figma.com/file/abcdef123456/MyDesigns?node-id=123%3A456 --format json
 ```
 
-The `--optimize` flag transforms the raw Figma data into a more structured format that helps Claude Code:
+The default summary format creates a detailed blueprint with embedded Figma metadata that helps Claude Code:
 
 1. Identify component types (button, modal, card, etc.)
 2. Find matching components in your codebase
@@ -118,7 +125,7 @@ When a Figma link is provided, use the following steps:
 
 1. Extract the Figma metadata:
    ```bash
-   claude-code-figma extract <figma-url> --optimize
+   claude-code-figma extract <figma-url>
    ```
 
 2. Based on the metadata, implement the component using:
@@ -131,7 +138,7 @@ When a Figma link is provided, use the following steps:
 ## Example Workflow
 
 1. User provides a Figma link to Claude
-2. Claude runs `claude-code-figma extract <url> --optimize` to get optimized metadata
+2. Claude runs `claude-code-figma extract <url>` to get the component blueprint with embedded metadata
 3. Claude uses the component mapping hints to find existing components in the project
 4. Claude analyzes the optimized metadata and the project's existing code/themes
 5. Claude generates a component that matches the design while respecting project conventions and reusing existing components
