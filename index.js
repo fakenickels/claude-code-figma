@@ -218,9 +218,24 @@ program
   .version('1.0.0')
   .addHelpText('after', `
 Examples:
-  $ claude-code-figma extract https://www.figma.com/file/abcdef123456/MyDesign?node-id=1:2 --optimize
+  $ claude-code-figma extract https://www.figma.com/file/abcdef123456/MyDesign?node-id=1:2
+  $ claude-code-figma extract https://www.figma.com/file/abcdef123456/MyDesign?node-id=1:2 --format json
+  $ claude-code-figma extract https://www.figma.com/file/abcdef123456/MyDesign?node-id=1:2 --format yaml
+  $ claude-code-figma extract https://www.figma.com/file/abcdef123456/MyDesign?node-id=1:2 --format bullet
   $ claude-code-figma init
   $ claude-code-figma auth --reset
+
+Output Formats:
+  summary  - Detailed component blueprint with embedded information (default)
+             * Includes descriptive HTML structure with Figma metadata
+             * Provides complete styling information via data attributes
+             * Shows component hierarchy with nested elements
+             * Suggests React component types based on element purpose
+             * Generates Tailwind config for custom colors
+             * Optimized for AI-assisted implementation
+  json     - Standard JSON format (raw Figma API data)
+  yaml     - YAML format (more compact than JSON)
+  bullet   - Hierarchical bullet points for easy reading
 
 Claude Code Integration:
   Run 'claude-code-figma init' with Claude Code to create a customized CLAUDE.md file
@@ -1149,13 +1164,476 @@ function suggestColorName(componentName, hexColor) {
   }
 }
 
+// Helper function to convert data to bullet points format
+function formatAsBulletPoints(data, indent = 0) {
+  if (data === null || data === undefined) return '';
+  
+  let result = '';
+  const indentStr = '  '.repeat(indent);
+  
+  if (Array.isArray(data)) {
+    data.forEach((item, index) => {
+      if (typeof item === 'object' && item !== null) {
+        result += `${indentStr}- Item ${index + 1}:\n${formatAsBulletPoints(item, indent + 1)}`;
+      } else {
+        result += `${indentStr}- ${item}\n`;
+      }
+    });
+  } else if (typeof data === 'object' && data !== null) {
+    const entries = Object.entries(data);
+    entries.forEach(([key, value]) => {
+      if (value === null || value === undefined) {
+        result += `${indentStr}- ${key}: null\n`;
+      } else if (Array.isArray(value) && value.length === 0) {
+        result += `${indentStr}- ${key}: []\n`;
+      } else if (typeof value === 'object' && Object.keys(value).length === 0) {
+        result += `${indentStr}- ${key}: {}\n`;
+      } else if (typeof value === 'object') {
+        result += `${indentStr}- ${key}:\n${formatAsBulletPoints(value, indent + 1)}`;
+      } else {
+        result += `${indentStr}- ${key}: ${value}\n`;
+      }
+    });
+  } else {
+    result += `${indentStr}${data}\n`;
+  }
+  
+  return result;
+}
+
+// Helper to create a summary of the optimized data
+function createComponentSummary(data) {
+  if (!data || !data.component) return '';
+  
+  const component = data.component;
+  let summary = '';
+  
+  // Component basics
+  summary += `# ${component.name} (${component.type})\n\n`;
+  summary += `**Component Type:** ${component.componentType}\n`;
+  summary += `**Component ID:** ${component.id}\n\n`;
+  
+  // Descriptive Component Structure with embedded information
+  summary += `**Component Structure (Pseudo-HTML with Info):**\n\`\`\`html\n`;
+  summary += `<!-- Main Component: ${component.name} (${component.type}) -->\n`;
+  summary += `<div class="${component.tailwindClasses?.join(' ') || ''}" data-component-id="${component.id}">\n`;
+  // Add descriptive children structure with embedded information
+  summary += generateDescriptiveComponentStructure(component.children, 2);
+  summary += `</div>\n\`\`\`\n\n`;
+  
+  // Tailwind classes - only include grouped by category for better organization
+  if (component.tailwindClasses && component.tailwindClasses.length > 0) {
+    const groupedClasses = groupTailwindClasses(component.tailwindClasses);
+    summary += `**Tailwind Classes:**\n`;
+    Object.entries(groupedClasses).forEach(([category, classes]) => {
+      if (classes.length > 0) {
+        summary += `- **${category}**: \`${classes.join(' ')}\`\n`;
+      }
+    });
+    summary += '\n';
+  }
+  
+  // Component State Variants
+  if (component.variants && Object.keys(component.variants).length > 0) {
+    summary += `**Component States:**\n`;
+    Object.entries(component.variants).forEach(([key, value]) => {
+      summary += `- **${key}**: ${value}\n`;
+    });
+    summary += '\n';
+  }
+  
+  // Interactive States
+  if (component.interactionPatterns && component.interactionPatterns.length > 0) {
+    summary += `**Interactive States:**\n`;
+    component.interactionPatterns.forEach(interaction => {
+      summary += `- **${interaction.trigger || 'Unknown'}**: ${interaction.action || 'Unknown'}\n`;
+    });
+    summary += '\n';
+  }
+  
+  // Enhanced Component Tree visualization
+  if (component.children && component.children.length > 0) {
+    summary += `**Component Tree:**\n\`\`\`\n`;
+    summary += generateComponentTree(component);
+    summary += `\`\`\`\n\n`;
+    
+    // Detailed children information with recursive traversal
+    summary += `**Component Details (Full Structure):**\n`;
+    summary += generateDetailedComponentTree(component.children, 0);
+    summary += '\n';
+  }
+  
+  // Responsive Behavior
+  summary += `**Responsive Behavior:**\n`;
+  summary += `- Base behavior defined by Tailwind classes\n`;
+  summary += `- Consider adding responsive variants (sm:, md:, lg:) for layout adjustments\n`;
+  summary += `- For mobile and smaller screens, consider vertical stacking: \`sm:flex-col\`\n\n`;
+  
+  // Only include custom colors - they're directly useful
+  if (component.implementationGuide && 
+      component.implementationGuide.tailwindConfig && 
+      component.implementationGuide.tailwindConfig.customColors &&
+      component.implementationGuide.tailwindConfig.customColors.length > 0) {
+    
+    summary += `**Custom Colors for Tailwind Config:**\n`;
+    summary += `\`\`\`js\nmodule.exports = {\n  theme: {\n    extend: {\n      colors: {\n`;
+    
+    // Group similar colors to reduce duplication
+    const colorGroups = {};
+    component.implementationGuide.tailwindConfig.customColors.forEach(color => {
+      // Strip common suffixes like "-text-blue" to group similar colors
+      const baseName = color.name.replace(/-text-(blue|green|white|black)$/, '');
+      if (!colorGroups[baseName]) {
+        colorGroups[baseName] = [];
+      }
+      colorGroups[baseName].push(color);
+    });
+    
+    // Output the first color of each group
+    Object.entries(colorGroups).forEach(([baseName, colors]) => {
+      if (colors.length > 0) {
+        const color = colors[0];
+        summary += `        '${baseName}': '${color.value}',\n`;
+      }
+    });
+    
+    summary += `      }\n    }\n  }\n};\n\`\`\`\n\n`;
+  }
+  
+  // Full component data reference (commented out by default)
+  summary += '\n<!-- Full component data is available in YAML or JSON format -->\n';
+  
+  return summary;
+}
+
+// Function to display the full component tree in a visual format
+function generateComponentTree(component) {
+  let result = ''; 
+  
+  // Add root component
+  result += `${component.name} (${component.type})\n`;
+  
+  // Add all children recursively
+  if (component.children && component.children.length > 0) {
+    result += generateComponentTreeChildren(component.children, 1);
+  }
+  
+  return result;
+}
+
+// Helper for recursive tree generation
+function generateComponentTreeChildren(children, level) {
+  if (!children || !Array.isArray(children)) return '';
+  
+  let result = '';
+  const indent = '│  '.repeat(level);
+  const lastIndex = children.length - 1;
+  
+  children.forEach((child, index) => {
+    // Determine if this is the last child at this level
+    const isLast = index === lastIndex;
+    const prefix = isLast ? '└─ ' : '├─ ';
+    const childLine = `${indent}${prefix}${child.name} (${child.type})`;
+    
+    result += childLine + '\n';
+    
+    // Add children of this node recursively with adjusted indentation
+    if (child.children && child.children.length > 0) {
+      // If this is the last item, use space in the indentation for its children
+      // Otherwise use the vertical bar to show the continuation
+      const nextIndent = isLast ? level : level + 1;
+      result += generateComponentTreeChildren(child.children, nextIndent);
+    }
+  });
+  
+  return result;
+}
+
+// Function to generate detailed component information with a tree structure
+function generateDetailedComponentTree(children, level) {
+  if (!children || !Array.isArray(children)) return '';
+  
+  let result = '';
+  const indent = '  '.repeat(level);
+  
+  children.forEach(child => {
+    result += `${indent}- **${child.name}** (${child.type})`;
+    if (child.componentType && child.componentType !== 'unknown') {
+      result += ` [${child.componentType}]`;
+    }
+    result += '\n';
+    
+    // For text nodes, include complete content
+    if (child.text) {
+      result += `${indent}  Text: "${child.text}"\n`;
+      
+      // Include text styling if available
+      if (child.textStyle) {
+        const textStyle = child.textStyle;
+        result += `${indent}  Style: `;
+        if (textStyle.fontFamily) result += `${textStyle.fontFamily}, `;
+        if (textStyle.fontSize) result += `${textStyle.fontSize}px, `;
+        if (textStyle.fontWeight) result += `weight: ${textStyle.fontWeight}, `;
+        if (textStyle.color) result += `color: ${textStyle.color}`;
+        result += '\n';
+      }
+      
+      // Include tailwind text classes
+      if (child.tailwindTextClasses && child.tailwindTextClasses.length > 0) {
+        result += `${indent}  Tailwind: \`${child.tailwindTextClasses.join(' ')}\`\n`;
+      }
+    }
+    
+    // Include child's tailwind classes
+    if (child.tailwindClasses && child.tailwindClasses.length > 0) {
+      result += `${indent}  Tailwind: \`${child.tailwindClasses.join(' ')}\`\n`;
+    }
+    
+    // For component instances, include properties
+    if (child.type === 'INSTANCE' && child.componentProperties) {
+      result += `${indent}  Component Properties: ${JSON.stringify(child.componentProperties)
+        .replace(/[{}"]/g, '')
+        .replace(/,/g, ', ')}\n`;
+    }
+    
+    // Recursively process children with increased indentation
+    if (child.children && child.children.length > 0) {
+      result += generateDetailedComponentTree(child.children, level + 2);
+    }
+  });
+  
+  return result;
+}
+
+// Generate descriptive HTML-like structure with embedded Figma information
+function generateDescriptiveComponentStructure(children, indentLevel) {
+  if (!children || children.length === 0) return '';
+  
+  const indent = ' '.repeat(indentLevel);
+  let structure = '';
+  
+  children.forEach(child => {
+    // Add common attributes to all elements
+    const commonAttrs = [
+      `data-figma-id="${child.id || ''}"`,
+      `data-type="${child.type || ''}"`,
+      `data-name="${child.name || ''}"`
+    ];
+    
+    if (child.componentType && child.componentType !== 'unknown') {
+      commonAttrs.push(`data-component-type="${child.componentType}"`);
+    }
+    
+    if (child.type === 'TEXT') {
+      // For text nodes, include text content and styling
+      const textClasses = child.tailwindTextClasses?.join(' ') || '';
+      structure += `${indent}<!-- Text: ${child.name} -->\n`;
+      structure += `${indent}<p class="${textClasses}" ${commonAttrs.join(' ')}`;
+      
+      // Add style information if available
+      if (child.textStyle) {
+        const { fontFamily, fontSize, fontWeight, color } = child.textStyle;
+        structure += ` data-font="${fontFamily || 'default'}" data-size="${fontSize || ''}px" data-weight="${fontWeight || ''}"`;
+        if (color) structure += ` data-color="${color}"`;
+      }
+      
+      structure += `>\n`;
+      structure += `${indent}  ${child.text || '[No Text Content]'}\n`;
+      structure += `${indent}</p>\n`;
+    } 
+    else if (child.type === 'INSTANCE') {
+      // For component instances, include component info
+      structure += `${indent}<!-- Instance: ${child.name} -->\n`;
+      structure += `${indent}<component`;
+      
+      // Add component ID and name
+      if (child.componentId) {
+        structure += ` data-component-id="${child.componentId}"`;
+      }
+      
+      // Add Tailwind classes
+      if (child.tailwindClasses && child.tailwindClasses.length > 0) {
+        structure += ` class="${child.tailwindClasses.join(' ')}"`;
+      }
+      
+      // Add component properties
+      if (child.componentProperties) {
+        structure += ` ${generateComponentAttributes(child.componentProperties)}`;
+      }
+      
+      structure += ` ${commonAttrs.join(' ')}`;
+      
+      // Check if it has children
+      if (child.children && child.children.length > 0) {
+        structure += `>\n`;
+        structure += generateDescriptiveComponentStructure(child.children, indentLevel + 2);
+        structure += `${indent}</component>\n`;
+      } else {
+        structure += ` />\n`;
+      }
+    } 
+    else {
+      // For container nodes, include styling and layout
+      const divClasses = child.tailwindClasses?.join(' ') || '';
+      structure += `${indent}<!-- Container: ${child.name} -->\n`;
+      
+      // Add layout information if available
+      let layoutInfo = '';
+      if (child.properties && child.properties.layout) {
+        const { direction, gap, padding } = child.properties.layout;
+        layoutInfo = ` data-layout="${direction || 'block'}" data-gap="${gap || 0}"`;
+        
+        if (padding && Object.keys(padding).length > 0) {
+          layoutInfo += ` data-padding="${Object.entries(padding).map(([k, v]) => `${k}:${v}`).join(',')}"`;
+        }
+      }
+      
+      structure += `${indent}<div class="${divClasses}" ${commonAttrs.join(' ')}${layoutInfo}>\n`;
+      
+      // Recursively add children
+      if (child.children && child.children.length > 0) {
+        structure += generateDescriptiveComponentStructure(child.children, indentLevel + 2);
+      }
+      
+      structure += `${indent}</div>\n`;
+    }
+  });
+  
+  return structure;
+}
+
+// Helper to generate component attributes from componentProperties
+function generateComponentAttributes(componentProperties) {
+  if (!componentProperties) return '';
+  
+  return Object.entries(componentProperties)
+    .map(([key, value]) => {
+      const propName = camelCase(key);
+      
+      if (value.type === 'BOOLEAN') {
+        return value.value ? `data-prop-${propName}="true"` : '';
+      } else if (value.type === 'TEXT') {
+        return `data-prop-${propName}="${value.value}"`;
+      } else if (value.type === 'VARIANT') {
+        return `data-variant-${propName}="${value.value}"`;
+      } else if (value.type === 'INSTANCE_SWAP') {
+        return `data-swap-${propName}="${value.value}"`;
+      }
+      
+      return '';
+    })
+    .filter(attr => attr !== '')
+    .join(' ');
+}
+
+// Helper to generate React children JSX structure
+function generateReactChildrenStructure(children, indentLevel) {
+  if (!children || children.length === 0) return '';
+  
+  const indent = ' '.repeat(indentLevel);
+  let structure = '';
+  
+  children.forEach(child => {
+    if (child.type === 'TEXT') {
+      structure += `${indent}<p className="${child.tailwindTextClasses?.join(' ') || ''}">${child.text || 'Text content'}</p>\n`;
+    } else if (child.type === 'INSTANCE') {
+      structure += `${indent}<${toPascalCase(child.name)} ${generateComponentProps(child)} />\n`;
+    } else {
+      structure += `${indent}<div className="${child.tailwindClasses?.join(' ') || ''}">\n`;
+      if (child.children && child.children.length > 0) {
+        structure += generateReactChildrenStructure(child.children, indentLevel + 2);
+      }
+      structure += `${indent}</div>\n`;
+    }
+  });
+  
+  return structure;
+}
+
+// Helper to convert component name to PascalCase
+function toPascalCase(str) {
+  if (!str) return 'Component';
+  return str
+    .split(/[-\s]/)
+    .map(word => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
+    .join('');
+}
+
+// Helper to generate React component props
+function generateComponentProps(component) {
+  if (!component.componentProperties) return '';
+  
+  const props = [];
+  Object.entries(component.componentProperties).forEach(([key, value]) => {
+    if (value.type === 'BOOLEAN') {
+      if (value.value) {
+        props.push(camelCase(key));
+      }
+    } else if (value.type === 'TEXT') {
+      props.push(`${camelCase(key)}="${value.value}"`);
+    } else if (value.type === 'VARIANT') {
+      props.push(`variant="${value.value}"`);
+    }
+  });
+  
+  return props.join(' ');
+}
+
+// Helper to convert string to camelCase
+function camelCase(str) {
+  if (!str) return '';
+  return str
+    .replace(/[^\w\s]/g, '')
+    .split(/[-\s]/)
+    .map((word, i) => i === 0 ? word.toLowerCase() : word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
+    .join('');
+}
+
+// Helper to group Tailwind classes by category
+function groupTailwindClasses(classes) {
+  const groups = {
+    'Layout': [],
+    'Spacing': [],
+    'Sizing': [],
+    'Typography': [],
+    'Colors': [],
+    'Borders': [],
+    'Effects': [],
+    'Other': []
+  };
+  
+  if (!classes || !Array.isArray(classes)) return groups;
+  
+  classes.forEach(cls => {
+    if (cls.match(/^flex|^grid|^block|^inline|^hidden|^table|^float/)) {
+      groups['Layout'].push(cls);
+    } else if (cls.match(/^p-|^m-|^gap-|^space-/)) {
+      groups['Spacing'].push(cls);
+    } else if (cls.match(/^w-|^h-|^min-|^max-/)) {
+      groups['Sizing'].push(cls);
+    } else if (cls.match(/^text-|^font-|^tracking-|^leading-/)) {
+      groups['Typography'].push(cls);
+    } else if (cls.match(/^bg-|^text-|^fill-|^stroke-/)) {
+      groups['Colors'].push(cls);
+    } else if (cls.match(/^border-|^rounded-/)) {
+      groups['Borders'].push(cls);
+    } else if (cls.match(/^shadow-|^opacity-|^blur-|^filter-/)) {
+      groups['Effects'].push(cls);
+    } else {
+      groups['Other'].push(cls);
+    }
+  });
+  
+  return groups;
+}
+
 program
   .command('extract <url>')
   .description('Extract metadata from a Figma URL')
   .option('-o, --output <path>', 'Output file path (defaults to stdout)')
-  .option('-f, --format <format>', 'Output format (json, yaml)', 'json')
+  .option('-f, --format <format>', 'Output format (json, yaml, bullet, summary)', 'summary')
   .option('-v, --verbose', 'Enable verbose logging')
-  .option('--optimize', 'Optimize output for component mapping')
+  .option('--optimize', 'Optimize output for component mapping', true) // Make optimization on by default
   .action(async (url, options) => {
     try {
       const spinner = ora('Extracting metadata from Figma...').start();
@@ -1178,6 +1656,12 @@ program
         // Simple JSON to YAML conversion
         const yaml = await import('js-yaml');
         output = yaml.default.dump(processedData);
+      } else if (options.format === 'bullet') {
+        // Convert to bullet points for more readable Claude output
+        output = formatAsBulletPoints(processedData);
+      } else if (options.format === 'summary') {
+        // Create a readable summary focused on important details
+        output = createComponentSummary(processedData);
       } else {
         throw new Error(`Unsupported format: ${options.format}`);
       }
