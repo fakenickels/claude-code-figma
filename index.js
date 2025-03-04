@@ -41,7 +41,7 @@ async function getAuthToken() {
   console.log('2. Log in and create a personal access token');
   console.log('3. Copy the token and paste it here');
   console.log('\nNote: Make sure you are using a token from the account that has access to the Figma file.');
-  console.log('If you need to change accounts, you can reset your token anytime with: figma-to-code auth --reset');
+  console.log('If you need to change accounts, you can reset your token anytime with: claude-code-figma auth --reset');
 
   const { openBrowser } = await inquirer.prompt([
     {
@@ -85,9 +85,11 @@ function parseFigmaUrl(url) {
     const searchParams = new URLSearchParams(parsedUrl.search);
     let nodeId = searchParams.get('node-id');
     
-    // Convert hyphen to colon in node ID if needed (Figma API expects colon format)
+    // Check if we need to convert hyphen to colon in node ID
+    // We'll accept both formats now based on the Figma URL
     if (nodeId && nodeId.includes('-')) {
-      nodeId = nodeId.replace('-', ':');
+      // Keep the original format as given in the URL
+      // The FigmaClient.findNodeById function will handle the search
     }
     
     // Determine if it's a file or design URL and extract the key
@@ -120,7 +122,7 @@ function parseFigmaUrl(url) {
   }
 }
 
-// Function to fetch node metadata from Figma
+// Function to fetch and process node metadata from Figma
 async function fetchNodeMetadata(url, verbose = false) {
   const spinner = ora('Authenticating with Figma...').start();
   
@@ -156,8 +158,41 @@ async function fetchNodeMetadata(url, verbose = false) {
         // Check if the node was found
         if (nodesData.nodes && nodesData.nodes[nodeId]) {
           spinner.succeed('Fetched node metadata successfully');
-          return nodesData.nodes[nodeId];
+          
+          // Extract the node document from the response
+          const nodeDocument = nodesData.nodes[nodeId].document;
+          
+          // Process the node properties using our enhanced extraction
+          const processedNode = figma.extractNodeProperties(nodeDocument);
+          
+          return processedNode;
         } else {
+          // If we can't find the exact nodeId, it may be in a different format
+          // Try to handle both hyphen and colon formats
+          const alternateNodeId = nodeId.includes('-') 
+            ? nodeId.replace('-', ':') 
+            : nodeId.replace(':', '-');
+          
+          spinner.text = `Trying alternate node ID format: ${alternateNodeId}...`;
+          
+          try {
+            const alternateData = await figma.fileNodes(fileKey, [alternateNodeId]);
+            
+            if (alternateData.nodes && alternateData.nodes[alternateNodeId]) {
+              spinner.succeed(`Fetched node metadata using alternate format: ${alternateNodeId}`);
+              
+              // Extract the node document from the response
+              const nodeDocument = alternateData.nodes[alternateNodeId].document;
+              
+              // Process the node properties using our enhanced extraction
+              const processedNode = figma.extractNodeProperties(nodeDocument);
+              
+              return processedNode;
+            }
+          } catch (alternateError) {
+            // Continue with original error handling if alternate ID also fails
+          }
+          
           spinner.fail(`Node with ID ${nodeId} not found in response`);
           
           // If we have nodes but the specific one wasn't found, show available nodes and exit
@@ -185,16 +220,19 @@ async function fetchNodeMetadata(url, verbose = false) {
       }
     }
     
-    // If no node ID is specified, fetch the entire file (with a warning about performance)
+    // If no node ID is specified, fetch the entire file
     spinner.text = `Fetching file data for ${fileKey}...`;
-    // Always show these warnings regardless of verbose mode as they're important
     console.log('Warning: No node ID specified. Fetching entire file, which may be slow for large files.');
     console.log('For better performance, specify a node ID in the URL using ?node-id=X:Y');
     
     try {
       const fileData = await figma.file(fileKey);
       spinner.succeed('Fetched document metadata successfully');
-      return fileData;
+      
+      // Process the document properties using our enhanced extraction
+      const processedDocument = figma.extractNodeProperties(fileData.document);
+      
+      return processedDocument;
     } catch (error) {
       if (error.message.includes('404') && url.includes('/design/')) {
         spinner.fail('Could not access this Figma design');
@@ -215,27 +253,27 @@ async function fetchNodeMetadata(url, verbose = false) {
 program
   .name('claude-code-figma')
   .description('AI-first CLI to help Claude Code extract and implement Figma designs')
-  .version('1.0.0')
+  .version('1.1.0')
   .addHelpText('after', `
 Examples:
   $ claude-code-figma extract https://www.figma.com/file/abcdef123456/MyDesign?node-id=1:2
   $ claude-code-figma extract https://www.figma.com/file/abcdef123456/MyDesign?node-id=1:2 --format json
   $ claude-code-figma extract https://www.figma.com/file/abcdef123456/MyDesign?node-id=1:2 --format yaml
-  $ claude-code-figma extract https://www.figma.com/file/abcdef123456/MyDesign?node-id=1:2 --format bullet
-  $ claude-code-figma init
-  $ claude-code-figma auth --reset
+  $ claude-code-figma extract https://www.figma.com/file/abcdef123456/MyDesign?node-id=1:2 --format ai-prompt
 
 Output Formats:
-  summary  - Detailed component blueprint with embedded information (default)
-             * Includes descriptive HTML structure with Figma metadata
-             * Provides complete styling information via data attributes
-             * Shows component hierarchy with nested elements
-             * Suggests React component types based on element purpose
-             * Generates Tailwind config for custom colors
-             * Optimized for AI-assisted implementation
-  json     - Standard JSON format (raw Figma API data)
+  ai-prompt - Detailed design description optimized for AI implementation (default)
+             * Structured hierarchical description of design elements
+             * Complete styling information with accurate measurements
+             * Component hierarchy with nested elements
+             * Layout and typography information
+             * Optimized for AI-assisted implementation in React with Tailwind CSS
+  json     - Standard JSON format with extracted design properties
   yaml     - YAML format (more compact than JSON)
-  bullet   - Hierarchical bullet points for easy reading
+  summary  - Legacy format with component blueprint and embedded information
+             * Includes descriptive HTML structure with Figma metadata
+             * Provides styling information and component hierarchy
+             * Use ai-prompt format for better results with Claude
 
 Claude Code Integration:
   Run 'claude-code-figma init' with Claude Code to create a customized CLAUDE.md file
@@ -291,877 +329,11 @@ program
     }
   });
 
-// Helper functions for optimizing Figma data for component mapping
-function optimizeFigmaData(figmaNode) {
-  if (!figmaNode || !figmaNode.document) {
-    return figmaNode; // Return as-is if not in expected format
-  }
-
-  // Extract the document node
-  const document = figmaNode.document;
-  
-  // Create the optimized data structure
-  const optimizedData = {
-    originalData: figmaNode, // Keep the original data for reference
-    component: {
-      name: document.name,
-      type: document.type,
-      id: document.id,
-      componentType: guessComponentType(document),
-      componentHints: generateComponentHints(document),
-      properties: extractProperties(document),
-      tailwindClasses: generateTailwindClasses(document),
-      children: processChildren(document.children),
-      styles: extractStyles(document, figmaNode.styles),
-      variants: extractVariants(document),
-      interactionPatterns: extractInteractions(document),
-      implementationGuide: generateImplementationGuide(document)
-    }
-  };
-  
-  return optimizedData;
-}
-
-// Helper functions for optimization process
-function guessComponentType(node) {
-  // Try to determine what kind of component this is (button, modal, card, etc.)
-  // based on node properties, name, and children
-  
-  const nameLower = node.name?.toLowerCase() || '';
-  
-  if (nameLower.includes('button') || 
-      (node.type === 'INSTANCE' && nameLower.includes('btn'))) {
-    return 'button';
-  }
-  
-  if (nameLower.includes('modal') || 
-      nameLower.includes('dialog') || 
-      (node.children && node.children.some(c => c.name?.toLowerCase().includes('modal')))) {
-    return 'modal';
-  }
-  
-  if (nameLower.includes('card') || 
-      (node.cornerRadius && node.cornerRadius > 0 && node.children)) {
-    return 'card';
-  }
-  
-  if (nameLower.includes('input') || 
-      nameLower.includes('field') || 
-      nameLower.includes('form')) {
-    return 'input';
-  }
-  
-  if (nameLower.includes('alert') || 
-      nameLower.includes('notification') ||
-      nameLower.includes('toast')) {
-    return 'alert';
-  }
-  
-  if (nameLower.includes('cancel')) {
-    return 'confirmation-dialog';
-  }
-  
-  return 'unknown';
-}
-
-function generateComponentHints(node) {
-  // Generate search hints for finding matching components in the host project
-  // Based on node name, type, and other characteristics
-  
-  const hints = [];
-  
-  // Add name-based hints
-  if (node.name) {
-    hints.push(node.name);
-    
-    // Add common component naming patterns
-    const nameLower = node.name.toLowerCase();
-    
-    if (nameLower.includes('cancel')) {
-      hints.push('Cancel', 'CancelDialog', 'Confirmation', 'ConfirmationDialog');
-    }
-  }
-  
-  // Add type-based hints
-  if (node.type === 'INSTANCE') {
-    // If it's an instance, we can use the component name as a hint
-    hints.push(`Component: ${node.name}`);
-  }
-  
-  // Add style-based hints
-  if (node.fills && node.fills.length > 0) {
-    const colors = node.fills
-      .filter(fill => fill.type === 'SOLID')
-      .map(fill => {
-        const color = fill.color;
-        return `rgb(${Math.round(color.r*255)}, ${Math.round(color.g*255)}, ${Math.round(color.b*255)})`;
-      });
-    
-    if (colors.length > 0) {
-      hints.push(`Colors: ${colors.join(', ')}`);
-    }
-  }
-  
-  return hints;
-}
-
-function extractProperties(node) {
-  // Extract important properties that would be useful for component matching
-  const props = {};
-  
-  // Extract basic properties
-  if (node.backgroundColor) {
-    props.backgroundColor = formatColor(node.backgroundColor);
-  }
-  
-  if (node.cornerRadius) {
-    props.borderRadius = node.cornerRadius;
-  }
-  
-  if (node.strokes && node.strokes.length > 0) {
-    props.border = {
-      width: node.strokeWeight || 1,
-      style: 'solid', // Default to solid
-      color: formatColor(node.strokes[0].color)
-    };
-  }
-  
-  // Extract layout properties
-  if (node.layoutMode) {
-    props.layout = {
-      direction: node.layoutMode === 'HORIZONTAL' ? 'row' : 'column',
-      gap: node.itemSpacing || 0,
-      padding: extractPadding(node)
-    };
-  }
-  
-  return props;
-}
-
-function formatColor(color) {
-  if (!color) return null;
-  
-  const r = Math.round(color.r * 255);
-  const g = Math.round(color.g * 255);
-  const b = Math.round(color.b * 255);
-  const a = color.a !== undefined ? color.a : 1;
-  
-  if (a === 1) {
-    return `rgb(${r}, ${g}, ${b})`;
-  } else {
-    return `rgba(${r}, ${g}, ${b}, ${a})`;
-  }
-}
-
-function extractPadding(node) {
-  const padding = {};
-  
-  if (node.paddingLeft !== undefined) padding.left = node.paddingLeft;
-  if (node.paddingRight !== undefined) padding.right = node.paddingRight;
-  if (node.paddingTop !== undefined) padding.top = node.paddingTop;
-  if (node.paddingBottom !== undefined) padding.bottom = node.paddingBottom;
-  
-  return padding;
-}
-
-function processChildren(children) {
-  if (!children || !Array.isArray(children)) return [];
-  
-  return children.map(child => {
-    const result = {
-      id: child.id,
-      name: child.name,
-      type: child.type,
-      componentType: guessComponentType(child),
-      properties: extractProperties(child),
-      tailwindClasses: generateTailwindClasses(child)
-    };
-    
-    // Handle text nodes specially
-    if (child.type === 'TEXT') {
-      result.text = child.characters;
-      result.textStyle = extractTextStyle(child);
-      result.tailwindTextClasses = generateTailwindTextClasses(child);
-    }
-    
-    // Process nested children
-    if (child.children && child.children.length > 0) {
-      result.children = processChildren(child.children);
-    }
-    
-    // Handle component instances
-    if (child.type === 'INSTANCE') {
-      result.componentId = child.componentId;
-      if (child.componentProperties) {
-        result.componentProperties = child.componentProperties;
-      }
-    }
-    
-    return result;
-  });
-}
-
-function extractTextStyle(textNode) {
-  if (!textNode.style) return {};
-  
-  return {
-    fontFamily: textNode.style.fontFamily,
-    fontSize: textNode.style.fontSize,
-    fontWeight: textNode.style.fontWeight,
-    lineHeight: textNode.style.lineHeightPx,
-    letterSpacing: textNode.style.letterSpacing,
-    textAlign: textNode.style.textAlignHorizontal?.toLowerCase(),
-    color: textNode.fills && textNode.fills.length > 0 ? formatColor(textNode.fills[0].color) : null
-  };
-}
-
-function extractStyles(node, projectStyles) {
-  // Extract style references that could map to design tokens or theme variables
-  const styles = {};
-  
-  // Extract style references from the node
-  if (node.styles) {
-    Object.entries(node.styles).forEach(([key, value]) => {
-      styles[key] = value;
-    });
-  }
-  
-  // Extract bound variables from the node
-  if (node.boundVariables) {
-    styles.variables = node.boundVariables;
-  }
-  
-  // Add any project styles that are referenced
-  if (projectStyles) {
-    styles.projectStyles = projectStyles;
-  }
-  
-  return styles;
-}
-
-function extractVariants(node) {
-  // Extract variant information if this is a component instance
-  if (node.type !== 'INSTANCE' || !node.componentProperties) {
-    return {};
-  }
-  
-  const variants = {};
-  
-  // Process component properties to extract variant info
-  Object.entries(node.componentProperties).forEach(([key, value]) => {
-    if (value.type === 'VARIANT') {
-      variants[key] = value.value;
-    }
-  });
-  
-  return variants;
-}
-
-function extractInteractions(node) {
-  if (!node.interactions || node.interactions.length === 0) {
-    return [];
-  }
-  
-  return node.interactions.map(interaction => ({
-    trigger: interaction.trigger?.type,
-    action: interaction.actions?.[0]?.type,
-    target: interaction.actions?.[0]?.destinationId
-  }));
-}
-
-// Tailwind CSS specific helper functions
-function generateTailwindClasses(node) {
-  if (!node) return [];
-  
-  const classes = [];
-  
-  // Extract layout classes
-  if (node.layoutMode === 'HORIZONTAL') {
-    classes.push('flex', 'flex-row');
-  } else if (node.layoutMode === 'VERTICAL') {
-    classes.push('flex', 'flex-col');
-  }
-  
-  // Extract spacing classes
-  if (node.itemSpacing) {
-    const gap = pxToTailwindSpacing(node.itemSpacing);
-    if (gap) classes.push(`gap-${gap}`);
-  }
-  
-  // Extract padding classes
-  const padding = extractPaddingClasses(node);
-  if (padding.length > 0) {
-    classes.push(...padding);
-  }
-  
-  // Extract background color
-  if (node.backgroundColor) {
-    const bgClass = colorToTailwindClass(node.backgroundColor, 'bg');
-    if (bgClass) classes.push(bgClass);
-  }
-  
-  // Extract border radius
-  if (node.cornerRadius) {
-    const rounded = pxToTailwindBorderRadius(node.cornerRadius);
-    if (rounded) classes.push(`rounded-${rounded}`);
-  }
-  
-  // Extract border
-  if (node.strokes && node.strokes.length > 0) {
-    const borderClass = colorToTailwindClass(node.strokes[0].color, 'border');
-    if (borderClass) classes.push(borderClass);
-    
-    if (node.strokeWeight) {
-      const borderWidth = pxToTailwindBorderWidth(node.strokeWeight);
-      if (borderWidth) classes.push(`border-${borderWidth}`);
-    } else {
-      classes.push('border');
-    }
-  }
-  
-  // Extract width and height
-  if (node.absoluteBoundingBox) {
-    const { width, height } = node.absoluteBoundingBox;
-    
-    if (width) {
-      const widthClass = pxToTailwindSize(width, 'w');
-      if (widthClass) classes.push(widthClass);
-    }
-    
-    if (height) {
-      const heightClass = pxToTailwindSize(height, 'h');
-      if (heightClass) classes.push(heightClass);
-    }
-  }
-  
-  // Extract shadow
-  if (node.effects && node.effects.length > 0) {
-    const shadowClasses = extractShadowClasses(node.effects);
-    if (shadowClasses.length > 0) {
-      classes.push(...shadowClasses);
-    }
-  }
-  
-  return classes;
-}
-
-function generateTailwindTextClasses(textNode) {
-  if (!textNode || !textNode.style) return [];
-  
-  const classes = [];
-  
-  // Font family
-  if (textNode.style.fontFamily) {
-    const fontFamily = fontFamilyToTailwind(textNode.style.fontFamily);
-    if (fontFamily) classes.push(fontFamily);
-  }
-  
-  // Font size
-  if (textNode.style.fontSize) {
-    const fontSize = fontSizeToTailwind(textNode.style.fontSize);
-    if (fontSize) classes.push(fontSize);
-  }
-  
-  // Font weight
-  if (textNode.style.fontWeight) {
-    const fontWeight = fontWeightToTailwind(textNode.style.fontWeight);
-    if (fontWeight) classes.push(fontWeight);
-  }
-  
-  // Line height
-  if (textNode.style.lineHeightPx) {
-    const lineHeight = lineHeightToTailwind(textNode.style.lineHeightPx);
-    if (lineHeight) classes.push(lineHeight);
-  }
-  
-  // Letter spacing
-  if (textNode.style.letterSpacing) {
-    const tracking = letterSpacingToTailwind(textNode.style.letterSpacing);
-    if (tracking) classes.push(tracking);
-  }
-  
-  // Text alignment
-  if (textNode.style.textAlignHorizontal) {
-    const textAlign = textAlignToTailwind(textNode.style.textAlignHorizontal);
-    if (textAlign) classes.push(textAlign);
-  }
-  
-  // Text color
-  if (textNode.fills && textNode.fills.length > 0 && textNode.fills[0].color) {
-    const textColor = colorToTailwindClass(textNode.fills[0].color, 'text');
-    if (textColor) classes.push(textColor);
-  }
-  
-  return classes;
-}
-
-function pxToTailwindSpacing(px) {
-  // Convert pixel values to Tailwind spacing scale
-  if (px <= 0) return null;
-  
-  if (px <= 1) return '0.5'; // 0.125rem = 2px
-  if (px <= 2) return '1';   // 0.25rem = 4px
-  if (px <= 3) return '1.5'; // 0.375rem = 6px
-  if (px <= 5) return '2';   // 0.5rem = 8px
-  if (px <= 7) return '3';   // 0.75rem = 12px
-  if (px <= 10) return '4';  // 1rem = 16px
-  if (px <= 14) return '5';  // 1.25rem = 20px
-  if (px <= 18) return '6';  // 1.5rem = 24px
-  if (px <= 22) return '7';  // 1.75rem = 28px
-  if (px <= 26) return '8';  // 2rem = 32px
-  if (px <= 34) return '10'; // 2.5rem = 40px
-  if (px <= 42) return '12'; // 3rem = 48px
-  if (px <= 56) return '16'; // 4rem = 64px
-  
-  return null; // Use custom size for larger values
-}
-
-function pxToTailwindBorderRadius(px) {
-  if (px <= 0) return null;
-  
-  if (px <= 1) return 'sm';   // 0.125rem = 2px
-  if (px <= 3) return 'DEFAULT'; // 0.25rem = 4px
-  if (px <= 6) return 'md';   // 0.375rem = 6px
-  if (px <= 9) return 'lg';   // 0.5rem = 8px
-  if (px <= 12) return 'xl';  // 0.75rem = 12px
-  if (px <= 16) return '2xl'; // 1rem = 16px
-  if (px <= 20) return '3xl'; // 1.5rem = 24px
-  
-  return 'full'; // Use rounded-full for larger values or exact px
-}
-
-function pxToTailwindBorderWidth(px) {
-  if (px <= 0) return null;
-  
-  if (px <= 1) return 'DEFAULT'; // 1px
-  if (px <= 2) return '2';       // 2px
-  if (px <= 4) return '4';       // 4px
-  if (px <= 8) return '8';       // 8px
-  
-  return null; // Use custom width for larger values
-}
-
-function pxToTailwindSize(px, prefix) {
-  // For w-* and h-* utilities
-  if (px <= 0) return null;
-  
-  // Try to match standard sizes
-  if (Math.abs(px - 16) <= 2) return `${prefix}-4`; // ~16px
-  if (Math.abs(px - 24) <= 2) return `${prefix}-6`; // ~24px
-  if (Math.abs(px - 32) <= 2) return `${prefix}-8`; // ~32px
-  if (Math.abs(px - 40) <= 2) return `${prefix}-10`; // ~40px
-  if (Math.abs(px - 48) <= 2) return `${prefix}-12`; // ~48px
-  if (Math.abs(px - 64) <= 3) return `${prefix}-16`; // ~64px
-  if (Math.abs(px - 80) <= 3) return `${prefix}-20`; // ~80px
-  if (Math.abs(px - 96) <= 3) return `${prefix}-24`; // ~96px
-  if (Math.abs(px - 128) <= 4) return `${prefix}-32`; // ~128px
-  if (Math.abs(px - 160) <= 4) return `${prefix}-40`; // ~160px
-  if (Math.abs(px - 192) <= 4) return `${prefix}-48`; // ~192px
-  if (Math.abs(px - 256) <= 5) return `${prefix}-64`; // ~256px
-  if (Math.abs(px - 320) <= 5) return `${prefix}-80`; // ~320px
-  if (Math.abs(px - 384) <= 5) return `${prefix}-96`; // ~384px
-  
-  // For percentages or special cases
-  if (Math.abs(px - 360) <= 5) return `${prefix}-full`; // could be full width in a container
-  
-  return null; // Use inline style for non-standard sizes
-}
-
-function extractPaddingClasses(node) {
-  let classes = [];
-  
-  // Extract individual padding values if available
-  if (node.paddingLeft !== undefined || node.paddingRight !== undefined || 
-      node.paddingTop !== undefined || node.paddingBottom !== undefined) {
-    
-    // Check if all paddings are equal
-    if (node.paddingLeft === node.paddingRight && 
-        node.paddingLeft === node.paddingTop && 
-        node.paddingLeft === node.paddingBottom &&
-        node.paddingLeft !== undefined) {
-      
-      const p = pxToTailwindSpacing(node.paddingLeft);
-      if (p) classes.push(`p-${p}`);
-      
-    } else {
-      // Handle individual paddings
-      if (node.paddingLeft !== undefined) {
-        const pl = pxToTailwindSpacing(node.paddingLeft);
-        if (pl) classes.push(`pl-${pl}`);
-      }
-      
-      if (node.paddingRight !== undefined) {
-        const pr = pxToTailwindSpacing(node.paddingRight);
-        if (pr) classes.push(`pr-${pr}`);
-      }
-      
-      if (node.paddingTop !== undefined) {
-        const pt = pxToTailwindSpacing(node.paddingTop);
-        if (pt) classes.push(`pt-${pt}`);
-      }
-      
-      if (node.paddingBottom !== undefined) {
-        const pb = pxToTailwindSpacing(node.paddingBottom);
-        if (pb) classes.push(`pb-${pb}`);
-      }
-      
-      // Try to simplify with px and py if possible
-      if (node.paddingLeft === node.paddingRight && node.paddingLeft !== undefined) {
-        const px = pxToTailwindSpacing(node.paddingLeft);
-        if (px) {
-          // Remove the individual classes
-          classes = classes.filter(c => !c.startsWith('pl-') && !c.startsWith('pr-'));
-          classes.push(`px-${px}`);
-        }
-      }
-      
-      if (node.paddingTop === node.paddingBottom && node.paddingTop !== undefined) {
-        const py = pxToTailwindSpacing(node.paddingTop);
-        if (py) {
-          // Remove the individual classes
-          classes = classes.filter(c => !c.startsWith('pt-') && !c.startsWith('pb-'));
-          classes.push(`py-${py}`);
-        }
-      }
-    }
-  }
-  
-  return classes;
-}
-
-function extractShadowClasses(effects) {
-  const classes = [];
-  
-  // Look for drop shadow effects
-  const shadows = effects.filter(effect => effect.type === 'DROP_SHADOW' && effect.visible !== false);
-  
-  if (shadows.length > 0) {
-    // Try to find the most prominent shadow
-    let hasShadow = false;
-    
-    for (const shadow of shadows) {
-      // Check for large outer shadow
-      if (shadow.radius >= 16 && shadow.offset.y >= 8) {
-        classes.push('shadow-xl');
-        hasShadow = true;
-        break;
-      }
-      // Check for medium shadow
-      else if (shadow.radius >= 8 && shadow.offset.y >= 4) {
-        classes.push('shadow-lg');
-        hasShadow = true;
-        break;
-      }
-      // Check for small shadow
-      else if (shadow.radius >= 3) {
-        classes.push('shadow-md');
-        hasShadow = true;
-        break;
-      }
-    }
-    
-    // If no specific size was determined but shadows exist
-    if (!hasShadow && shadows.length > 0) {
-      classes.push('shadow');
-    }
-  }
-  
-  return classes;
-}
-
-function colorToTailwindClass(color, prefix) {
-  if (!color) return null;
-  
-  // Generate RGB values
-  const r = Math.round(color.r * 255);
-  const g = Math.round(color.g * 255);
-  const b = Math.round(color.b * 255);
-  const a = color.a !== undefined ? color.a : 1;
-  
-  // Special case for black and white
-  if (r === 0 && g === 0 && b === 0) {
-    return `${prefix}-black`;
-  }
-  if (r === 255 && g === 255 && b === 255) {
-    return `${prefix}-white`;
-  }
-  
-  // Try to match to closest Tailwind color
-  // These are rough approximations of common Tailwind colors
-  
-  // Grays
-  if (Math.abs(r - g) < 10 && Math.abs(r - b) < 10) {
-    const brightness = (r + g + b) / 3;
-    
-    if (brightness < 30) return `${prefix}-gray-950`;
-    if (brightness < 50) return `${prefix}-gray-900`;
-    if (brightness < 80) return `${prefix}-gray-800`;
-    if (brightness < 110) return `${prefix}-gray-700`;
-    if (brightness < 135) return `${prefix}-gray-600`;
-    if (brightness < 160) return `${prefix}-gray-500`;
-    if (brightness < 185) return `${prefix}-gray-400`;
-    if (brightness < 210) return `${prefix}-gray-300`;
-    if (brightness < 230) return `${prefix}-gray-200`;
-    if (brightness < 245) return `${prefix}-gray-100`;
-    return `${prefix}-gray-50`;
-  }
-  
-  // Reds
-  if (r > 170 && g < 100 && b < 100) {
-    if (r > 240) return `${prefix}-red-500`;
-    if (r > 220) return `${prefix}-red-600`;
-    if (r > 200) return `${prefix}-red-700`;
-    if (r > 180) return `${prefix}-red-800`;
-    return `${prefix}-red-900`;
-  }
-  
-  // Blues
-  if (b > 170 && r < 100 && g < 160) {
-    if (b > 240) return `${prefix}-blue-500`;
-    if (b > 220) return `${prefix}-blue-600`;
-    if (b > 200) return `${prefix}-blue-700`;
-    if (b > 180) return `${prefix}-blue-800`;
-    return `${prefix}-blue-900`;
-  }
-  
-  // For transparency
-  if (a < 0.2) return `${prefix}-transparent`;
-  
-  // If opacity is significant but not full
-  if (a < 0.95) {
-    return `${prefix}-opacity-${Math.round(a * 100)}`;
-  }
-  
-  // Return null for colors that don't match standard Tailwind palette
-  // Claude Code will need to suggest adding a custom color to the Tailwind config
-  return null;
-}
-
-function fontFamilyToTailwind(fontFamily) {
-  if (!fontFamily) return null;
-  
-  const normalizedFont = fontFamily.toLowerCase();
-  
-  if (normalizedFont.includes('inter')) return 'font-sans'; // Common UI font
-  if (normalizedFont.includes('helvetica') || normalizedFont.includes('arial')) return 'font-sans';
-  if (normalizedFont.includes('times') || normalizedFont.includes('georgia')) return 'font-serif';
-  if (normalizedFont.includes('mono') || normalizedFont.includes('courier')) return 'font-mono';
-  
-  return null; // Custom font family
-}
-
-function fontSizeToTailwind(fontSize) {
-  if (!fontSize) return null;
-  
-  if (fontSize <= 12) return 'text-xs';
-  if (fontSize <= 14) return 'text-sm';
-  if (fontSize <= 16) return 'text-base';
-  if (fontSize <= 18) return 'text-lg';
-  if (fontSize <= 20) return 'text-xl';
-  if (fontSize <= 24) return 'text-2xl';
-  if (fontSize <= 30) return 'text-3xl';
-  if (fontSize <= 36) return 'text-4xl';
-  if (fontSize <= 48) return 'text-5xl';
-  if (fontSize <= 60) return 'text-6xl';
-  if (fontSize <= 72) return 'text-7xl';
-  if (fontSize <= 96) return 'text-8xl';
-  if (fontSize <= 128) return 'text-9xl';
-  
-  return null; // Custom font size
-}
-
-function fontWeightToTailwind(fontWeight) {
-  if (!fontWeight) return null;
-  
-  if (fontWeight <= 100) return 'font-thin';
-  if (fontWeight <= 200) return 'font-extralight';
-  if (fontWeight <= 300) return 'font-light';
-  if (fontWeight <= 400) return 'font-normal';
-  if (fontWeight <= 500) return 'font-medium';
-  if (fontWeight <= 600) return 'font-semibold';
-  if (fontWeight <= 700) return 'font-bold';
-  if (fontWeight <= 800) return 'font-extrabold';
-  if (fontWeight <= 900) return 'font-black';
-  
-  return 'font-black'; // Maximum weight
-}
-
-function lineHeightToTailwind(lineHeight) {
-  if (!lineHeight) return null;
-  
-  if (lineHeight <= 16) return 'leading-none';
-  if (lineHeight <= 20) return 'leading-tight';
-  if (lineHeight <= 24) return 'leading-snug';
-  if (lineHeight <= 28) return 'leading-normal';
-  if (lineHeight <= 32) return 'leading-relaxed';
-  if (lineHeight <= 40) return 'leading-loose';
-  
-  return null; // Custom line height
-}
-
-function letterSpacingToTailwind(letterSpacing) {
-  if (!letterSpacing) return null;
-  
-  if (letterSpacing <= -0.05) return 'tracking-tighter';
-  if (letterSpacing <= -0.025) return 'tracking-tight';
-  if (letterSpacing >= -0.01 && letterSpacing <= 0.01) return 'tracking-normal';
-  if (letterSpacing >= 0.025) return 'tracking-wide';
-  if (letterSpacing >= 0.05) return 'tracking-wider';
-  if (letterSpacing >= 0.1) return 'tracking-widest';
-  
-  return null; // Custom letter spacing
-}
-
-function textAlignToTailwind(textAlign) {
-  if (!textAlign) return null;
-  
-  const align = textAlign.toLowerCase();
-  
-  if (align.includes('left')) return 'text-left';
-  if (align.includes('center')) return 'text-center';
-  if (align.includes('right')) return 'text-right';
-  if (align.includes('justify')) return 'text-justify';
-  
-  return null;
-}
-
-function generateImplementationGuide(node) {
-  const componentType = guessComponentType(node);
-  const tailwindClasses = generateTailwindClasses(node);
-  
-  const guide = {
-    recommendedApproach: "",
-    tailwindConfig: {
-      customColors: [],
-      customFontFamily: [],
-      customSpacing: []
-    }
-  };
-  
-  // Generate recommendations based on component type
-  switch (componentType) {
-    case 'confirmation-dialog':
-      guide.recommendedApproach = `
-This appears to be a confirmation dialog component. Consider using:
-- Check if the host project already has a Dialog or Modal component
-- Use existing Button components for the actions
-- For the layout, use Tailwind flex utilities (${tailwindClasses.filter(c => c.startsWith('flex')).join(', ')})
-- If the project uses React, consider using headlessui/Dialog or similar accessible components
-`;
-      break;
-    case 'button':
-      guide.recommendedApproach = `
-This appears to be a button component. Consider using:
-- Check if the host project already has a Button component with variants
-- For styling, use the Tailwind classes: ${tailwindClasses.join(' ')}
-- Match the existing button naming patterns in the project
-`;
-      break;
-    default:
-      guide.recommendedApproach = `
-This component can be implemented using the generated Tailwind classes.
-Look for similar components in the host project to maintain consistency.
-`;
-  }
-  
-  // Add any custom color suggestions
-  if (node.backgroundColor) {
-    const { r, g, b } = node.backgroundColor;
-    if (colorToTailwindClass(node.backgroundColor, 'bg') === null) {
-      const hexColor = rgbToHex(r, g, b);
-      guide.tailwindConfig.customColors.push({
-        name: suggestColorName(node.name, hexColor),
-        value: hexColor
-      });
-    }
-  }
-  
-  // Add text style suggestions
-  if (node.children) {
-    const textNodes = findTextNodes(node);
-    textNodes.forEach(textNode => {
-      if (textNode.fills && textNode.fills.length > 0) {
-        const fill = textNode.fills[0];
-        if (fill.type === 'SOLID' && colorToTailwindClass(fill.color, 'text') === null) {
-          const { r, g, b } = fill.color;
-          const hexColor = rgbToHex(r, g, b);
-          guide.tailwindConfig.customColors.push({
-            name: suggestColorName(textNode.name + "-text", hexColor),
-            value: hexColor
-          });
-        }
-      }
-    });
-  }
-  
-  return guide;
-}
-
-// Helper function to find all text nodes in a component tree
-function findTextNodes(node, results = []) {
-  if (!node) return results;
-  
-  if (node.type === 'TEXT') {
-    results.push(node);
-  }
-  
-  if (node.children && Array.isArray(node.children)) {
-    node.children.forEach(child => findTextNodes(child, results));
-  }
-  
-  return results;
-}
-
-// Helper function to convert RGB to HEX
-function rgbToHex(r, g, b) {
-  const toHex = (value) => {
-    const hex = Math.round(value * 255).toString(16);
-    return hex.length === 1 ? '0' + hex : hex;
-  };
-  
-  return `#${toHex(r)}${toHex(g)}${toHex(b)}`;
-}
-
-// Helper function to suggest a color name based on component name and color value
-function suggestColorName(componentName, hexColor) {
-  // Simplify the component name to create a base for the color name
-  const baseName = componentName
-    .toLowerCase()
-    .replace(/[^a-z0-9]/g, '-')
-    .replace(/-+/g, '-')
-    .replace(/^-|-$/g, '');
-  
-  // Check if it's a common color
-  if (hexColor === '#000000') return 'black';
-  if (hexColor === '#ffffff') return 'white';
-  
-  // For other colors, use component name and a suffix
-  const r = parseInt(hexColor.substr(1, 2), 16);
-  const g = parseInt(hexColor.substr(3, 2), 16);
-  const b = parseInt(hexColor.substr(5, 2), 16);
-  
-  // Determine a color family
-  let colorFamily = '';
-  if (r > g && r > b) colorFamily = 'red';
-  else if (g > r && g > b) colorFamily = 'green';
-  else if (b > r && b > g) colorFamily = 'blue';
-  else if (r === g && g === b) colorFamily = 'gray';
-  else if (r > 200 && g > 200 && b < 100) colorFamily = 'yellow';
-  else if (r > 200 && g < 100 && b > 200) colorFamily = 'purple';
-  else if (r < 100 && g > 200 && b > 200) colorFamily = 'cyan';
-  
-  // Determine brightness for suffix
-  const brightness = (r + g + b) / 3;
-  let brightnessSuffix = '';
-  
-  if (brightness < 85) brightnessSuffix = 'dark';
-  else if (brightness > 170) brightnessSuffix = 'light';
-  
-  if (baseName.includes(colorFamily)) {
-    return brightnessSuffix ? `${baseName}-${brightnessSuffix}` : baseName;
-  } else {
-    return brightnessSuffix ? `${baseName}-${colorFamily}-${brightnessSuffix}` : `${baseName}-${colorFamily}`;
-  }
+// Helper functions to format Figma data for different output formats
+function formatAsAIPrompt(figmaNode, figmaClient) {
+  if (!figmaNode) return '';
+  
+  return figmaClient.generateAIPrompt(figmaNode);
 }
 
 // Helper function to convert data to bullet points format
@@ -1201,107 +373,112 @@ function formatAsBulletPoints(data, indent = 0) {
   return result;
 }
 
-// Helper to create a summary of the optimized data
+// Helper to create a legacy summary of the optimized data
 function createComponentSummary(data) {
-  if (!data || !data.component) return '';
+  if (!data) return '';
   
-  const component = data.component;
   let summary = '';
   
   // Component basics
-  summary += `# ${component.name} (${component.type})\n\n`;
-  summary += `**Component Type:** ${component.componentType}\n`;
-  summary += `**Component ID:** ${component.id}\n\n`;
+  summary += `# ${data.name} (${data.type})\n\n`;
   
   // Descriptive Component Structure with embedded information
   summary += `**Component Structure (Pseudo-HTML with Info):**\n\`\`\`html\n`;
-  summary += `<!-- Main Component: ${component.name} (${component.type}) -->\n`;
-  summary += `<div class="${component.tailwindClasses?.join(' ') || ''}" data-component-id="${component.id}">\n`;
+  summary += `<!-- Main Component: ${data.name} (${data.type}) -->\n`;
+  summary += `<div data-component-id="${data.id}">\n`;
+  
   // Add descriptive children structure with embedded information
-  summary += generateDescriptiveComponentStructure(component.children, 2);
+  if (data.children && data.children.length > 0) {
+    summary += generateDescriptiveComponentStructure(data.children, 2);
+  }
+  
   summary += `</div>\n\`\`\`\n\n`;
   
-  // Tailwind classes - only include grouped by category for better organization
-  if (component.tailwindClasses && component.tailwindClasses.length > 0) {
-    const groupedClasses = groupTailwindClasses(component.tailwindClasses);
-    summary += `**Tailwind Classes:**\n`;
-    Object.entries(groupedClasses).forEach(([category, classes]) => {
-      if (classes.length > 0) {
-        summary += `- **${category}**: \`${classes.join(' ')}\`\n`;
+  // Component Properties
+  summary += `**Component Properties:**\n`;
+  
+  if (data.size) {
+    summary += `- **Size**: ${data.size.width}px × ${data.size.height}px\n`;
+  }
+  
+  if (data.backgroundColor) {
+    summary += `- **Background**: ${data.backgroundColor}\n`;
+  }
+  
+  if (data.cornerRadius) {
+    summary += `- **Border Radius**: ${data.cornerRadius}px\n`;
+  }
+  
+  if (data.fills && data.fills.length > 0) {
+    summary += `- **Fills**: ${data.fills.map(fill => 
+      fill.type === 'SOLID' ? fill.color : `${fill.type} gradient`).join(', ')}\n`;
+  }
+  
+  if (data.strokes && data.strokes.length > 0) {
+    summary += `- **Border**: ${data.strokeWeight}px ${data.strokes[0].color}\n`;
+  }
+  
+  if (data.effects && data.effects.length > 0) {
+    summary += `- **Effects**: ${data.effects.map(effect => effect.type).join(', ')}\n`;
+  }
+  
+  // Layout properties
+  if (data.layout) {
+    summary += `- **Layout**: ${data.layout.mode === 'HORIZONTAL' ? 'Row' : 'Column'}\n`;
+    
+    if (data.layout.spacing) {
+      summary += `  - **Gap**: ${data.layout.spacing}px\n`;
+    }
+    
+    if (data.layout.padding) {
+      const padding = data.layout.padding;
+      summary += `  - **Padding**: `;
+      
+      if (Object.values(padding).every(val => val === Object.values(padding)[0])) {
+        summary += `${Object.values(padding)[0]}px all sides\n`;
+      } else {
+        const paddingStr = [
+          padding.top || 0,
+          padding.right || 0,
+          padding.bottom || 0,
+          padding.left || 0
+        ].join('px ') + 'px';
+        summary += `${paddingStr} (top, right, bottom, left)\n`;
       }
-    });
-    summary += '\n';
-  }
-  
-  // Component State Variants
-  if (component.variants && Object.keys(component.variants).length > 0) {
-    summary += `**Component States:**\n`;
-    Object.entries(component.variants).forEach(([key, value]) => {
-      summary += `- **${key}**: ${value}\n`;
-    });
-    summary += '\n';
-  }
-  
-  // Interactive States
-  if (component.interactionPatterns && component.interactionPatterns.length > 0) {
-    summary += `**Interactive States:**\n`;
-    component.interactionPatterns.forEach(interaction => {
-      summary += `- **${interaction.trigger || 'Unknown'}**: ${interaction.action || 'Unknown'}\n`;
-    });
-    summary += '\n';
+    }
   }
   
   // Enhanced Component Tree visualization
-  if (component.children && component.children.length > 0) {
-    summary += `**Component Tree:**\n\`\`\`\n`;
-    summary += generateComponentTree(component);
+  if (data.children && data.children.length > 0) {
+    summary += `\n**Component Tree:**\n\`\`\`\n`;
+    summary += generateComponentTree(data);
     summary += `\`\`\`\n\n`;
-    
-    // Detailed children information with recursive traversal
-    summary += `**Component Details (Full Structure):**\n`;
-    summary += generateDetailedComponentTree(component.children, 0);
-    summary += '\n';
   }
   
-  // Responsive Behavior
-  summary += `**Responsive Behavior:**\n`;
-  summary += `- Base behavior defined by Tailwind classes\n`;
-  summary += `- Consider adding responsive variants (sm:, md:, lg:) for layout adjustments\n`;
-  summary += `- For mobile and smaller screens, consider vertical stacking: \`sm:flex-col\`\n\n`;
+  // Implementation Considerations
+  summary += `\n**Implementation Tips:**\n`;
+  summary += `- Consider using Flexbox or Grid for layout structure\n`;
+  summary += `- Use Tailwind CSS for styling:\n`;
   
-  // Only include custom colors - they're directly useful
-  if (component.implementationGuide && 
-      component.implementationGuide.tailwindConfig && 
-      component.implementationGuide.tailwindConfig.customColors &&
-      component.implementationGuide.tailwindConfig.customColors.length > 0) {
-    
-    summary += `**Custom Colors for Tailwind Config:**\n`;
-    summary += `\`\`\`js\nmodule.exports = {\n  theme: {\n    extend: {\n      colors: {\n`;
-    
-    // Group similar colors to reduce duplication
-    const colorGroups = {};
-    component.implementationGuide.tailwindConfig.customColors.forEach(color => {
-      // Strip common suffixes like "-text-blue" to group similar colors
-      const baseName = color.name.replace(/-text-(blue|green|white|black)$/, '');
-      if (!colorGroups[baseName]) {
-        colorGroups[baseName] = [];
-      }
-      colorGroups[baseName].push(color);
-    });
-    
-    // Output the first color of each group
-    Object.entries(colorGroups).forEach(([baseName, colors]) => {
-      if (colors.length > 0) {
-        const color = colors[0];
-        summary += `        '${baseName}': '${color.value}',\n`;
-      }
-    });
-    
-    summary += `      }\n    }\n  }\n};\n\`\`\`\n\n`;
+  if (data.size) {
+    summary += `  - \`w-[${data.size.width}px] h-[${data.size.height}px]\` for dimensions\n`;
   }
   
-  // Full component data reference (commented out by default)
-  summary += '\n<!-- Full component data is available in YAML or JSON format -->\n';
+  if (data.backgroundColor) {
+    summary += `  - \`bg-[${data.backgroundColor}]\` for background\n`;
+  }
+  
+  if (data.cornerRadius) {
+    summary += `  - \`rounded-[${data.cornerRadius}px]\` for border radius\n`;
+  }
+  
+  if (data.layout && data.layout.mode) {
+    summary += `  - \`${data.layout.mode === 'HORIZONTAL' ? 'flex flex-row' : 'flex flex-col'}\` for layout\n`;
+    
+    if (data.layout.spacing) {
+      summary += `  - \`gap-[${data.layout.spacing}px]\` for spacing\n`;
+    }
+  }
   
   return summary;
 }
@@ -1349,62 +526,6 @@ function generateComponentTreeChildren(children, level) {
   return result;
 }
 
-// Function to generate detailed component information with a tree structure
-function generateDetailedComponentTree(children, level) {
-  if (!children || !Array.isArray(children)) return '';
-  
-  let result = '';
-  const indent = '  '.repeat(level);
-  
-  children.forEach(child => {
-    result += `${indent}- **${child.name}** (${child.type})`;
-    if (child.componentType && child.componentType !== 'unknown') {
-      result += ` [${child.componentType}]`;
-    }
-    result += '\n';
-    
-    // For text nodes, include complete content
-    if (child.text) {
-      result += `${indent}  Text: "${child.text}"\n`;
-      
-      // Include text styling if available
-      if (child.textStyle) {
-        const textStyle = child.textStyle;
-        result += `${indent}  Style: `;
-        if (textStyle.fontFamily) result += `${textStyle.fontFamily}, `;
-        if (textStyle.fontSize) result += `${textStyle.fontSize}px, `;
-        if (textStyle.fontWeight) result += `weight: ${textStyle.fontWeight}, `;
-        if (textStyle.color) result += `color: ${textStyle.color}`;
-        result += '\n';
-      }
-      
-      // Include tailwind text classes
-      if (child.tailwindTextClasses && child.tailwindTextClasses.length > 0) {
-        result += `${indent}  Tailwind: \`${child.tailwindTextClasses.join(' ')}\`\n`;
-      }
-    }
-    
-    // Include child's tailwind classes
-    if (child.tailwindClasses && child.tailwindClasses.length > 0) {
-      result += `${indent}  Tailwind: \`${child.tailwindClasses.join(' ')}\`\n`;
-    }
-    
-    // For component instances, include properties
-    if (child.type === 'INSTANCE' && child.componentProperties) {
-      result += `${indent}  Component Properties: ${JSON.stringify(child.componentProperties)
-        .replace(/[{}"]/g, '')
-        .replace(/,/g, ', ')}\n`;
-    }
-    
-    // Recursively process children with increased indentation
-    if (child.children && child.children.length > 0) {
-      result += generateDetailedComponentTree(child.children, level + 2);
-    }
-  });
-  
-  return result;
-}
-
 // Generate descriptive HTML-like structure with embedded Figma information
 function generateDescriptiveComponentStructure(children, indentLevel) {
   if (!children || children.length === 0) return '';
@@ -1420,25 +541,19 @@ function generateDescriptiveComponentStructure(children, indentLevel) {
       `data-name="${child.name || ''}"`
     ];
     
-    if (child.componentType && child.componentType !== 'unknown') {
-      commonAttrs.push(`data-component-type="${child.componentType}"`);
-    }
-    
     if (child.type === 'TEXT') {
       // For text nodes, include text content and styling
-      const textClasses = child.tailwindTextClasses?.join(' ') || '';
       structure += `${indent}<!-- Text: ${child.name} -->\n`;
-      structure += `${indent}<p class="${textClasses}" ${commonAttrs.join(' ')}`;
+      structure += `${indent}<p ${commonAttrs.join(' ')}`;
       
       // Add style information if available
       if (child.textStyle) {
-        const { fontFamily, fontSize, fontWeight, color } = child.textStyle;
+        const { fontFamily, fontSize, fontWeight } = child.textStyle;
         structure += ` data-font="${fontFamily || 'default'}" data-size="${fontSize || ''}px" data-weight="${fontWeight || ''}"`;
-        if (color) structure += ` data-color="${color}"`;
       }
       
       structure += `>\n`;
-      structure += `${indent}  ${child.text || '[No Text Content]'}\n`;
+      structure += `${indent}  ${child.textContent || '[No Text Content]'}\n`;
       structure += `${indent}</p>\n`;
     } 
     else if (child.type === 'INSTANCE') {
@@ -1446,22 +561,17 @@ function generateDescriptiveComponentStructure(children, indentLevel) {
       structure += `${indent}<!-- Instance: ${child.name} -->\n`;
       structure += `${indent}<component`;
       
-      // Add component ID and name
+      // Add component ID
       if (child.componentId) {
         structure += ` data-component-id="${child.componentId}"`;
       }
       
-      // Add Tailwind classes
-      if (child.tailwindClasses && child.tailwindClasses.length > 0) {
-        structure += ` class="${child.tailwindClasses.join(' ')}"`;
-      }
+      structure += ` ${commonAttrs.join(' ')}`;
       
       // Add component properties
       if (child.componentProperties) {
         structure += ` ${generateComponentAttributes(child.componentProperties)}`;
       }
-      
-      structure += ` ${commonAttrs.join(' ')}`;
       
       // Check if it has children
       if (child.children && child.children.length > 0) {
@@ -1474,21 +584,20 @@ function generateDescriptiveComponentStructure(children, indentLevel) {
     } 
     else {
       // For container nodes, include styling and layout
-      const divClasses = child.tailwindClasses?.join(' ') || '';
       structure += `${indent}<!-- Container: ${child.name} -->\n`;
       
       // Add layout information if available
       let layoutInfo = '';
-      if (child.properties && child.properties.layout) {
-        const { direction, gap, padding } = child.properties.layout;
-        layoutInfo = ` data-layout="${direction || 'block'}" data-gap="${gap || 0}"`;
+      if (child.layout) {
+        const { mode, spacing, padding } = child.layout;
+        layoutInfo = ` data-layout="${mode === 'HORIZONTAL' ? 'row' : 'column'}" data-gap="${spacing || 0}"`;
         
         if (padding && Object.keys(padding).length > 0) {
           layoutInfo += ` data-padding="${Object.entries(padding).map(([k, v]) => `${k}:${v}`).join(',')}"`;
         }
       }
       
-      structure += `${indent}<div class="${divClasses}" ${commonAttrs.join(' ')}${layoutInfo}>\n`;
+      structure += `${indent}<div ${commonAttrs.join(' ')}${layoutInfo}>\n`;
       
       // Recursively add children
       if (child.children && child.children.length > 0) {
@@ -1526,59 +635,6 @@ function generateComponentAttributes(componentProperties) {
     .join(' ');
 }
 
-// Helper to generate React children JSX structure
-function generateReactChildrenStructure(children, indentLevel) {
-  if (!children || children.length === 0) return '';
-  
-  const indent = ' '.repeat(indentLevel);
-  let structure = '';
-  
-  children.forEach(child => {
-    if (child.type === 'TEXT') {
-      structure += `${indent}<p className="${child.tailwindTextClasses?.join(' ') || ''}">${child.text || 'Text content'}</p>\n`;
-    } else if (child.type === 'INSTANCE') {
-      structure += `${indent}<${toPascalCase(child.name)} ${generateComponentProps(child)} />\n`;
-    } else {
-      structure += `${indent}<div className="${child.tailwindClasses?.join(' ') || ''}">\n`;
-      if (child.children && child.children.length > 0) {
-        structure += generateReactChildrenStructure(child.children, indentLevel + 2);
-      }
-      structure += `${indent}</div>\n`;
-    }
-  });
-  
-  return structure;
-}
-
-// Helper to convert component name to PascalCase
-function toPascalCase(str) {
-  if (!str) return 'Component';
-  return str
-    .split(/[-\s]/)
-    .map(word => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
-    .join('');
-}
-
-// Helper to generate React component props
-function generateComponentProps(component) {
-  if (!component.componentProperties) return '';
-  
-  const props = [];
-  Object.entries(component.componentProperties).forEach(([key, value]) => {
-    if (value.type === 'BOOLEAN') {
-      if (value.value) {
-        props.push(camelCase(key));
-      }
-    } else if (value.type === 'TEXT') {
-      props.push(`${camelCase(key)}="${value.value}"`);
-    } else if (value.type === 'VARIANT') {
-      props.push(`variant="${value.value}"`);
-    }
-  });
-  
-  return props.join(' ');
-}
-
 // Helper to convert string to camelCase
 function camelCase(str) {
   if (!str) return '';
@@ -1589,79 +645,41 @@ function camelCase(str) {
     .join('');
 }
 
-// Helper to group Tailwind classes by category
-function groupTailwindClasses(classes) {
-  const groups = {
-    'Layout': [],
-    'Spacing': [],
-    'Sizing': [],
-    'Typography': [],
-    'Colors': [],
-    'Borders': [],
-    'Effects': [],
-    'Other': []
-  };
-  
-  if (!classes || !Array.isArray(classes)) return groups;
-  
-  classes.forEach(cls => {
-    if (cls.match(/^flex|^grid|^block|^inline|^hidden|^table|^float/)) {
-      groups['Layout'].push(cls);
-    } else if (cls.match(/^p-|^m-|^gap-|^space-/)) {
-      groups['Spacing'].push(cls);
-    } else if (cls.match(/^w-|^h-|^min-|^max-/)) {
-      groups['Sizing'].push(cls);
-    } else if (cls.match(/^text-|^font-|^tracking-|^leading-/)) {
-      groups['Typography'].push(cls);
-    } else if (cls.match(/^bg-|^text-|^fill-|^stroke-/)) {
-      groups['Colors'].push(cls);
-    } else if (cls.match(/^border-|^rounded-/)) {
-      groups['Borders'].push(cls);
-    } else if (cls.match(/^shadow-|^opacity-|^blur-|^filter-/)) {
-      groups['Effects'].push(cls);
-    } else {
-      groups['Other'].push(cls);
-    }
-  });
-  
-  return groups;
-}
-
 program
   .command('extract <url>')
   .description('Extract metadata from a Figma URL')
   .option('-o, --output <path>', 'Output file path (defaults to stdout)')
-  .option('-f, --format <format>', 'Output format (json, yaml, bullet, summary)', 'summary')
+  .option('-f, --format <format>', 'Output format (ai-prompt, json, yaml, summary)', 'ai-prompt')
   .option('-v, --verbose', 'Enable verbose logging')
-  .option('--optimize', 'Optimize output for component mapping', true) // Make optimization on by default
   .action(async (url, options) => {
     try {
       const spinner = ora('Extracting metadata from Figma...').start();
       const metadata = await fetchNodeMetadata(url, options.verbose);
       spinner.succeed('Metadata extracted successfully');
       
-      // If optimize flag is set, transform the metadata
-      let processedData = metadata;
-      if (options.optimize) {
-        spinner.text = 'Optimizing for component mapping...';
-        processedData = optimizeFigmaData(metadata);
-        spinner.succeed('Data optimized for component mapping');
-      }
+      // Initialize Figma client needed for AI prompt generation
+      const token = await getAuthToken();
+      const figma = new FigmaClient(token, options.verbose);
       
-      // Format the output
+      // Format the output based on requested format
       let output;
       if (options.format === 'json') {
-        output = JSON.stringify(processedData, null, 2);
+        output = JSON.stringify(metadata, null, 2);
       } else if (options.format === 'yaml') {
         // Simple JSON to YAML conversion
         const yaml = await import('js-yaml');
-        output = yaml.default.dump(processedData);
+        output = yaml.default.dump(metadata);
       } else if (options.format === 'bullet') {
-        // Convert to bullet points for more readable Claude output
-        output = formatAsBulletPoints(processedData);
+        // Convert to bullet points for more readable output
+        output = formatAsBulletPoints(metadata);
+      } else if (options.format === 'ai-prompt') {
+        // Generate the AI-optimized prompt
+        spinner.text = 'Generating AI-optimized prompt...';
+        output = formatAsAIPrompt(metadata, figma);
+        spinner.succeed('AI prompt generated');
       } else if (options.format === 'summary') {
-        // Create a readable summary focused on important details
-        output = createComponentSummary(processedData);
+        // Create a readable legacy summary
+        output = createComponentSummary(metadata);
       } else {
         throw new Error(`Unsupported format: ${options.format}`);
       }
@@ -1733,7 +751,7 @@ program
         
         if (!response.ok) {
           console.error('API verification failed. Your token may be invalid or expired.');
-          console.error('Please try re-authenticating with: figma-to-code auth --reset');
+          console.error('Please try re-authenticating with: claude-code-figma auth --reset');
           process.exit(1);
         }
         

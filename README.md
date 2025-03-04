@@ -53,40 +53,66 @@ claude-code-figma extract https://www.figma.com/file/abcdef123456/MyDesigns?node
 ### Options
 
 - `-o, --output <path>`: Save output to a file instead of printing to console
-- `-f, --format <format>`: Output format (summary, json, yaml, bullet). Default: summary
+- `-f, --format <format>`: Output format (ai-prompt, json, yaml, summary). Default: ai-prompt
 - `-v, --verbose`: Enable verbose logging
-- `--optimize`: Optimize output for component mapping (enabled by default)
 
 Example:
 
 ```bash
-# Using default summary format (recommended)
+# Using default AI prompt format (recommended)
 claude-code-figma extract https://www.figma.com/file/abcdef123456/MyDesigns?node-id=123%3A456
 
 # Save to file
-claude-code-figma extract https://www.figma.com/file/abcdef123456/MyDesigns?node-id=123%3A456 --output component-metadata.md
+claude-code-figma extract https://www.figma.com/file/abcdef123456/MyDesigns?node-id=123%3A456 --output component-prompt.txt
 
 # Using other formats
 claude-code-figma extract https://www.figma.com/file/abcdef123456/MyDesigns?node-id=123%3A456 --format json
 ```
 
-The default summary format creates a detailed blueprint with embedded Figma metadata that helps Claude Code:
+## Output Formats
 
-1. Identify component types (button, modal, card, etc.)
-2. Find matching components in your codebase
-3. Map Figma properties to your component props
-4. Generate Tailwind CSS classes for styling
-5. Identify colors that need to be added to your Tailwind config
-6. Provide implementation guidance specific to the component type
-7. Preserve design intent while using your project's component system
+### AI Prompt Format (Default)
 
-The optimization process automatically generates Tailwind CSS classes for:
-- Layout (flex, grid, padding, margin, etc.)
-- Typography (font size, weight, color, etc.)
-- Colors (background, text, border colors)
-- Borders and rounded corners
-- Sizing and spacing
-- Shadows and effects
+The default `ai-prompt` format creates a detailed, hierarchical description of the design that is optimized for AI consumption:
+
+```
+Your task is to create a React component that matches the following Figma design:
+
+Design Element:
+- Type: FRAME
+- Name: Button
+- Width: 120px
+- Height: 40px
+- Background Color: #0066ff
+- Border Radius: 4
+- Contains:
+  Design Element:
+  - Type: TEXT
+  - Name: Button Text
+  - Text: "Click Me"
+  - Font Family: Inter
+  - Font Size: 16px
+  - Font Weight: 500
+  - Text Alignment: center
+  - Color: #ffffff
+
+The component should be written in React with Tailwind CSS.
+Assume that the host project uses React and Tailwind CSS, and you can reuse any existing components or styles from the project's scope.
+Generate the complete React component code.
+```
+
+This structured format helps Claude Code:
+1. Understand the component hierarchy
+2. Capture all styling details with precise measurements
+3. Implement text content with proper typography
+4. Create accurate layout with proper spacing
+5. Generate Tailwind CSS classes that match the design
+
+### Other Formats
+
+- `json`: Raw extracted design data in JSON format
+- `yaml`: YAML representation of the design data
+- `summary`: Legacy format with component blueprint and embedded information
 
 ## Integration with Claude Code
 
@@ -123,25 +149,32 @@ This project uses the `claude-code-figma` CLI tool to extract design information
 
 When a Figma link is provided, use the following steps:
 
-1. Extract the Figma metadata:
+1. Extract the Figma metadata using the AI-optimized prompt format:
    ```bash
    claude-code-figma extract <figma-url>
    ```
 
-2. Based on the metadata, implement the component using:
+2. The output is a structured prompt that contains:
+   - Detailed component hierarchy with all design elements
+   - Complete styling information with measurements
+   - Text content and typography details
+   - Layout properties (flex direction, gaps, alignment)
+   - Border, radius, and effect information
+
+3. Based on the extracted information, implement the component using:
    - The project's existing theme system for colors, typography, and spacing
+   - React components with Tailwind CSS for styling
    - The component structure from the Figma design
    - The naming conventions used in the codebase
-   - The framework and styling approaches used in the project
 ```
 
 ## Example Workflow
 
 1. User provides a Figma link to Claude
-2. Claude runs `claude-code-figma extract <url>` to get the component blueprint with embedded metadata
-3. Claude uses the component mapping hints to find existing components in the project
-4. Claude analyzes the optimized metadata and the project's existing code/themes
-5. Claude generates a component that matches the design while respecting project conventions and reusing existing components
+2. Claude runs `claude-code-figma extract <url>` to get the AI-optimized design description
+3. Claude analyzes the design data and the project's existing codebase
+4. Claude generates a React component with Tailwind CSS that matches the design while respecting project conventions
+5. If needed, Claude suggests custom color additions to the Tailwind config
 
 ## The AI-First CLI Paradigm
 

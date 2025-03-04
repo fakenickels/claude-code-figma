@@ -8,19 +8,32 @@ This project uses the `claude-code-figma` CLI tool to extract design information
 
 When a Figma link is provided, use the following steps:
 
-1. Extract the Figma metadata:
+1. Extract the Figma metadata using the AI-optimized prompt format:
    ```bash
-   claude-code-figma extract <figma-url> --optimize
+   claude-code-figma extract <figma-url>
    ```
 
-2. Based on the metadata, implement the component using:
+2. The output is a structured prompt that contains:
+   - Detailed component hierarchy with all design elements
+   - Complete styling information with measurements
+   - Text content and typography details
+   - Layout properties (flex direction, gaps, alignment)
+   - Border, radius, and effect information
+
+3. Based on the extracted information, implement the component using:
    - The project's existing theme system for colors, typography, and spacing
+   - React components with Tailwind CSS for styling
    - The component structure from the Figma design
-   - The Tailwind CSS classes provided in the `tailwindClasses` section
    - The naming conventions used in the codebase
-   - The framework and styling approaches used in the project
+
+4. For more detailed raw data, you can use alternative formats:
+   ```bash
+   # Get full JSON data
+   claude-code-figma extract <figma-url> --format json
    
-   If the metadata contains `tailwindConfig` suggestions, you may need to add custom colors or other values to the project's tailwind.config.js file.
+   # Get a component summary with implementation tips
+   claude-code-figma extract <figma-url> --format summary
+   ```
 
 ### Design System Information
 
@@ -29,36 +42,46 @@ When implementing components from Figma designs, refer to these project-specific
 #### Color System
 <!-- Provide information about your project's color system -->
 Example:
-- Primary colors: Defined in `src/styles/theme.js` as `theme.colors.primary`
-- Secondary colors: Defined in `src/styles/theme.js` as `theme.colors.secondary`
-- Background colors: Use `theme.colors.background`
+- Primary colors: Defined in `tailwind.config.js` under `theme.extend.colors.primary`
+- Secondary colors: Defined in `tailwind.config.js` under `theme.extend.colors.secondary`
+- Text colors: Use Tailwind's text utilities with project's color palette
+- For colors not in the theme, use `bg-[#hexcode]` or add them to the Tailwind config
 
 #### Typography
 <!-- Provide information about your project's typography system -->
 Example:
-- Headings: Use the `Typography` component with the `variant="h1"` through `variant="h6"` props
-- Body text: Use the `Typography` component with `variant="body1"` or `variant="body2"` props
+- Headings: Use the appropriate Tailwind text classes (text-4xl, text-2xl, etc.)
+- Body text: Use the default font with text-base or text-sm
+- Custom fonts are configured in `tailwind.config.js` under `theme.extend.fontFamily`
+- Font weights map to Tailwind's font-thin through font-black scale
 
 #### Spacing
 <!-- Provide information about your project's spacing system -->
 Example:
-- Use theme spacing utilities: `theme.spacing(1)` equals 8px
-- For margins and padding, use the `m` and `p` props from the component system
+- Use Tailwind's spacing scale (px, 0.5, 1, 2, etc. correlating to 1px, 2px, 4px, 8px, etc.)
+- For specific pixel values not in the scale, use the bracket notation: p-[14px]
+- Keep responsive layouts by using Tailwind's responsive prefixes (sm:, md:, lg:, etc.)
 
 #### Component Structure
 <!-- Provide information about your project's component structure -->
 Example:
 - Components should be placed in `src/components/`
-- Each component should have its own directory with:
-  - `index.js` - Exports the component
-  - `ComponentName.jsx` - The component implementation
-  - `ComponentName.styles.js` - Styled components or styles
-  - `ComponentName.test.js` - Tests
+- UI components go in `src/components/ui/`
+- Each component should have:
+  - Clear, descriptive props with TypeScript types
+  - Appropriate use of React hooks when needed
+  - Tailwind classes for styling instead of CSS files
 
 #### Naming Conventions
 <!-- Provide information about your project's naming conventions -->
 Example:
 - Component files and directories use PascalCase
 - React components use PascalCase
-- CSS classes use kebab-case
-- JavaScript functions and variables use camelCase
+- Props and other variables use camelCase
+- Avoid abbreviations in component and prop names for clarity
+
+#### Accessibility Considerations
+- Use semantic HTML elements (button for buttons, not divs)
+- Include ARIA attributes when appropriate
+- Ensure sufficient color contrast
+- Support keyboard navigation for interactive elements
