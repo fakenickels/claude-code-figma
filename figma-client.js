@@ -224,9 +224,13 @@ class FigmaClient {
       properties.constraints = node.constraints;
     }
     
-    // Children (recursive)
+    // Children (recursive, only visible ones)
     if (node.children && node.children.length > 0) {
-      properties.children = node.children.map(child => this.extractNodeProperties(child));
+      // Filter out invisible children
+      const visibleChildren = node.children.filter(child => child.visible !== false);
+      if (visibleChildren.length > 0) {
+        properties.children = visibleChildren.map(child => this.extractNodeProperties(child));
+      }
     }
     
     return properties;
@@ -337,6 +341,11 @@ class FigmaClient {
 
   generateNodeDescription(node, indentLevel) {
     if (!node) return '';
+    
+    // Skip invisible elements
+    if (node.visible === false) {
+      return '';
+    }
     
     const indent = '  '.repeat(indentLevel);
     let description = `${indent}Design Element:\n`;
@@ -470,12 +479,17 @@ class FigmaClient {
       });
     }
     
-    // Children
+    // Children (only include visible ones)
     if (node.children && node.children.length > 0) {
-      description += `${indent}- Contains:\n`;
-      node.children.forEach(child => {
-        description += this.generateNodeDescription(child, indentLevel + 1);
-      });
+      // Filter out invisible children
+      const visibleChildren = node.children.filter(child => child.visible !== false);
+      
+      if (visibleChildren.length > 0) {
+        description += `${indent}- Contains:\n`;
+        visibleChildren.forEach(child => {
+          description += this.generateNodeDescription(child, indentLevel + 1);
+        });
+      }
     }
     
     return description;
